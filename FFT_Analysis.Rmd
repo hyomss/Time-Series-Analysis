@@ -1,0 +1,255 @@
+---
+title: "Time Series FFT analysis"
+author: "Hyom"
+date: ""
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r}
+library(readr)
+energy_data <- read_csv("path/energydata_complete.csv")
+# View(energy_data)
+energy_data$date <- strptime(as.character(energy_data$date),format="%Y-%m-%d %H:%M:%S")
+energy_data$date <- as.POSIXct(energy_data$date,tz = "UTC")
+```
+
+```{r}
+library(knitr)
+
+data <- data.frame(
+  Variables = c("date time", "Appliances", "lights", "T1", "RH_1", "T2", "RH_2", "T3", "RH_3", "T4", "RH_4", "T5", "RH_5", "T6", "RH_6", "T7", "RH_7", "T8", "RH_8", "T9", "RH_9", "To", "Pressure", "RH_out", "Windspeed", "Visibility", "Tdewpoint", "rv1", "rv2"),
+  Description = c("Year-month-day hour:minute:second", "Energy use in Wh", "Energy use of light fixtures in the house in Wh", "Temperature in kitchen area, in Celsius", "Humidity in kitchen area, in %", "Temperature in living room area, in Celsius", "Humidity in living room area, in %", "Temperature in laundry room area", "Humidity in laundry room area, in %", "Temperature in office room, in Celsius", "Humidity in office room, in %", "Temperature in bathroom, in Celsius", "Humidity in bathroom, in %", "Temperature outside the building (north side), in Celsius", "Humidity outside the building (north side), in %", "Temperature in ironing room, in Celsius", "Humidity in ironing room, in %", "Temperature in teenager room 2, in Celsius", "Humidity in teenager room 2, in %", "Temperature in parents room, in Celsius", "Humidity in parents room, in %", "Temperature outside (from Chièvres weather station), in Celsius", "Pressure (from Chièvres weather station), in mm Hg", "Humidity outside (from Chièvres weather station), in %", "Windspeed (from Chièvres weather station), in m/s", "Visibility (from Chièvres weather station), in km", "Tdewpoint (from Chièvres weather station), °C", "Random variable 1, nondimensional", "Random variable 2, nondimensional")
+)
+
+variable <- kable(data)
+variable
+```
+
+
+## EDA
+```{r}
+any(is.na(energy_data$Appliances))
+any(is.na(energy_data))
+energy_data[43,]
+which(is.na(energy_data))
+```
+
+
+
+```{r}
+# fill in missing values
+for(i in 2:(nrow(energy_data)-1)) {
+  if(is.na(energy_data$Appliances[i])) {
+    energy_data$Appliances[i] <- mean(c(energy_data$Appliances[i-1], energy_data$Appliances[i+1]), na.rm = TRUE)
+  }
+}
+```
+
+
+```{r}
+library(reshape2) 
+library(ggplot2)
+library(astsa)
+
+energy_data$date <- as.POSIXct(energy_data$date, format="%Y-%m-%d %H:%M:%S", tz="UTC")
+
+energy_data_long <- melt(energy_data, id.vars = "date", measure.vars = c("Appliances"))
+
+ggplot(energy_data_long, aes(x = date, y = value, color = variable)) + 
+  geom_line() +
+  scale_x_datetime(date_labels = "%Y-%m-%d %H:%M:%S", date_breaks = "1 week") +
+  labs(x = "Date", y = "Value", color = "Variable") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+  ggtitle("Time Series of Appliances")
+```
+
+
+```{r}
+energy_data$date <- as.POSIXct(energy_data$date, format="%Y-%m-%d %H:%M:%S", tz="UTC")
+
+fft_result <- fft(energy_data[[2]])
+
+N <- length(energy_data[[2]])
+fs <- 6/3600
+
+frequencies <- (0:(N-1)) * fs / N
+
+magnitudes <- Mod(fft_result)
+plot(frequencies, magnitudes, type = 'l', main = "FFT Magnitude of the Appliances", xlab = "Frequency (Hz)", ylab = "Magnitude")
+```
+
+## FFT Filtering  
+
+```{r}
+fs <- 1 / (600)  #sampling rate , 10 minutes
+
+n <- length(energy_data[[2]])
+
+frequencies <- (0:(n/2-1)) * fs / n
+
+magnitudes <- Mod(fft_result)
+magnitudes <- magnitudes[1:(n/2)]
+
+plot(frequencies[0:1000], magnitudes[0:1000], type = 'l', main = "FFT Magnitude of the Appliances", xlab = "Frequency (Hz)", ylab = "Magnitude")
+```
+
+```{r}
+data <- data.frame(index=1:length(frequencies), frequencies=frequencies, magnitudes=magnitudes)
+data_sorted <- data[order(-data$magnitudes),]
+
+#filtering top 4
+top_frequencies <- data_sorted
+
+fft_filtered <- fft_result
+fft_filtered[] <- 0
+fft_filtered[top_frequencies$index] <- fft_result[top_frequencies$index]
+
+center_index <- (length(fft_result) + 1) / 2
+conjugate_indices <- ifelse(top_frequencies$index < center_index, length(fft_result) - top_frequencies$index + 1, length(fft_result) - top_frequencies$index + 1)
+conjugate_indices <- conjugate_indices[conjugate_indices != center_index]
+fft_filtered[conjugate_indices] <- fft_result[conjugate_indices]
+
+reconstructed_signal <- Re(fft(fft_filtered, inverse = TRUE)) / length(fft_result)
+
+plot(energy_data$date[1:500], reconstructed_signal[1:500], type='l', main="Original Signal", xlab="Month", ylab="Appliances")
+```
+
+
+```{r}
+data <- data.frame(index=1:length(frequencies), frequencies=frequencies, magnitudes=magnitudes)
+data_sorted <- data[order(-data$magnitudes),]
+
+#filtering top 4
+top_frequencies <- data_sorted[2:4, ]
+
+fft_filtered <- fft_result
+fft_filtered[] <- 0
+fft_filtered[top_frequencies$index] <- fft_result[top_frequencies$index]
+
+center_index <- (length(fft_result) + 1) / 2
+conjugate_indices <- ifelse(top_frequencies$index < center_index, length(fft_result) - top_frequencies$index + 1, length(fft_result) - top_frequencies$index + 1)
+conjugate_indices <- conjugate_indices[conjugate_indices != center_index]
+fft_filtered[conjugate_indices] <- fft_result[conjugate_indices]
+
+reconstructed_signal <- Re(fft(fft_filtered, inverse = TRUE)) / length(fft_result)
+
+plot(energy_data$date, reconstructed_signal, type='l', main="Reconstructed from Selected Frequencies Without mean", xlab="Month", ylab="Appliances")
+```
+
+
+```{r}
+data <- data.frame(index=1:length(frequencies), frequencies=frequencies, magnitudes=magnitudes)
+data_sorted <- data[order(-data$magnitudes),]
+
+top_frequencies <- data_sorted[2:4,]
+
+fft_filtered <- fft_result
+fft_filtered[] <- 0
+fft_filtered[top_frequencies$index] <- fft_result[top_frequencies$index]
+
+center_index <- (length(fft_result) + 1) / 2
+conjugate_indices <- ifelse(top_frequencies$index < center_index, length(fft_result) - top_frequencies$index + 1, length(fft_result) - top_frequencies$index + 1)
+conjugate_indices <- conjugate_indices[conjugate_indices != center_index]
+fft_filtered[conjugate_indices] <- fft_result[conjugate_indices]
+
+reconstructed_signal <- Re(fft(fft_filtered, inverse = TRUE)) / length(fft_result)
+
+plot(energy_data$date[0:500], reconstructed_signal[0:500], type='l', main="Reconstructed from Selected Frequencies without Mean", xlab="Date", ylab="Appliances")
+```
+```{r}
+top_frequencies
+```
+
+
+```{r}
+top_frequencies <- data_sorted[1, ]
+
+fft_filtered <- fft_result
+fft_filtered[] <- 0
+fft_filtered[top_frequencies$index] <- fft_result[top_frequencies$index]
+
+center_index <- (length(fft_result) + 1) / 2
+conjugate_indices <- ifelse(top_frequencies$index < center_index, length(fft_result) - top_frequencies$index + 1, length(fft_result) - top_frequencies$index + 1)
+conjugate_indices <- conjugate_indices[conjugate_indices != center_index]
+fft_filtered[conjugate_indices] <- fft_result[conjugate_indices]
+
+reconstructed_signal <- Re(fft(fft_filtered, inverse = TRUE)) / length(fft_result)
+
+plot(energy_data$date, reconstructed_signal, type='l', main="Frequency #1", xlab="Month", ylab="Signal")
+```
+
+```{r}
+top_frequencies <- data_sorted[2, ]
+
+fft_filtered <- fft_result
+fft_filtered[] <- 0
+fft_filtered[top_frequencies$index] <- fft_result[top_frequencies$index]
+
+center_index <- (length(fft_result) + 1) / 2
+conjugate_indices <- ifelse(top_frequencies$index < center_index, length(fft_result) - top_frequencies$index + 1, length(fft_result) - top_frequencies$index + 1)
+conjugate_indices <- conjugate_indices[conjugate_indices != center_index]
+fft_filtered[conjugate_indices] <- fft_result[conjugate_indices]
+
+reconstructed_signal <- Re(fft(fft_filtered, inverse = TRUE)) / length(fft_result)
+
+plot(energy_data$date[0:300], reconstructed_signal[0:300], type='l', main="Frequency #2", xlab="Date & Time", ylab="Signal")
+```
+
+```{r}
+top_frequencies <- data_sorted[3, ]
+
+fft_filtered <- fft_result
+fft_filtered[] <- 0
+fft_filtered[top_frequencies$index] <- fft_result[top_frequencies$index]
+
+center_index <- (length(fft_result) + 1) / 2
+conjugate_indices <- ifelse(top_frequencies$index < center_index, length(fft_result) - top_frequencies$index + 1, length(fft_result) - top_frequencies$index + 1)
+conjugate_indices <- conjugate_indices[conjugate_indices != center_index]
+fft_filtered[conjugate_indices] <- fft_result[conjugate_indices]
+
+reconstructed_signal <- Re(fft(fft_filtered, inverse = TRUE)) / length(fft_result)
+
+plot(energy_data$date[0:150], reconstructed_signal[0:150], type='l', main="Frequency #3", xlab="Date & Time", ylab="Signal")
+```
+
+```{r}
+top_frequencies <- data_sorted[4, ]
+
+fft_filtered <- fft_result
+fft_filtered[] <- 0
+fft_filtered[top_frequencies$index] <- fft_result[top_frequencies$index]
+
+center_index <- (length(fft_result) + 1) / 2
+conjugate_indices <- ifelse(top_frequencies$index < center_index, length(fft_result) - top_frequencies$index + 1, length(fft_result) - top_frequencies$index + 1)
+conjugate_indices <- conjugate_indices[conjugate_indices != center_index]
+fft_filtered[conjugate_indices] <- fft_result[conjugate_indices]
+
+reconstructed_signal <- Re(fft(fft_filtered, inverse = TRUE)) / length(fft_result)
+
+plot(energy_data$date[0:150], reconstructed_signal[0:150], type='l', main="Frequency #4", xlab="Date & Time", ylab="Signal")
+```
+```{r}
+acf2(reconstructed_signal[1:1000])
+
+tsplot(reconstructed_signal[1:1000])
+tsplot(diff(reconstructed_signal[1:1000]))
+acf2(reconstructed_signal)
+acf2(diff(reconstructed_signal[1:1000]))
+
+#sarima(reconstructed_signal[1:1000],no.constant = TRUE, p=3, d=0, q=0)
+#sarima.for(reconstructed_signal, n.ahead = 10, p=3, d=0, q=0)
+#sarima.for(reconstructed_signal[1:1000], n.ahead = 10, p=2, d=0, q=0, P=1, D=0, Q=0, S=50)
+
+
+
+library(fpp2)
+model = lm(reconstructed_signal[1:1000] ~ time(reconstructed_signal[1:1000]))
+checkresiduals(model, test="LB")
+```
+
